@@ -32,7 +32,7 @@ num_steps        = 128
 mini_batch_size  = 256
 ppo_epochs       = 3
 threshold_reward = 16
-load_weight_n = 12000
+load_weight_n = 305000
 
 def make_env():
     def _thunk():
