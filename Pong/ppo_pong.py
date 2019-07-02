@@ -95,7 +95,7 @@ class ActorCritic(nn.Module):
         h = h.reshape((-1, 5 * 5 * 32))
 
         h = F.relu(self.lin(h))
-        pi = self.pi(h)
+        pi = F.softmax(self.pi(h))
         value = F.relu(self.value(h))
 
         return pi, value
@@ -117,8 +117,8 @@ def test_env(vis=False):
     total_reward = 0
     while not done:
         state = preprocess_batch([f1,f2])
-        prob, _ = model(state)
-        dist = Categorical(logits = prob)
+        pi, _ = model(state)
+        dist = Categorical(pi)
         next_state, reward, done, _ = env.step(dist.sample().cpu().numpy()[0])
         state = next_state
         if vis: env.render()
@@ -145,12 +145,14 @@ def ppo_iter(mini_batch_size, states, actions, log_probs, returns, advantage): #
         yield states[ids[i], :], actions[ids[i]], log_probs[ids[i]], returns[ids[i], :], advantage[ids[i], :]
         
 
-def ppo_update(ppo_epochs, mini_batch_size, states, actions, log_probs, returns, advantages, clip_param=0.2): # training
+def ppo_update(ppo_epochs, mini_batch_size, states, actios, log_probs, returns, advantages, clip_param=0.2): # training
+    mean_loss = 0
     for _ in range(ppo_epochs):
+        loss_sum = 0
         for state, action, old_log_probs, return_, advantage in ppo_iter(mini_batch_size, states, actions, log_probs, returns, advantages):
             with torch.autograd.detect_anomaly():
                 pi, value = model(state)
-                dist = Categorical(logits = pi)
+                dist = Categorical(pi)
                 #     new_log_probs a= dist.log_prob(action)
                 
                 pi_a = pi.gather(1,action.unsqueeze(-1))
@@ -158,25 +160,26 @@ def ppo_update(ppo_epochs, mini_batch_size, states, actions, log_probs, returns,
                 new_log_probs = torch.log(pi_a)
 
                 ratio = (new_log_probs - old_log_probs).exp()
-                # print("ratio :",  ratio)
                 surr1 = ratio * advantage
                 surr2 = torch.clamp(ratio, 1.0 - clip_param, 1.0 + clip_param) * advantage
 
 
                 actor_loss  = - torch.min(surr1, surr2).mean()
-                # print("actor loss", actor_loss)
                 critic_loss = (return_.detach() - value).pow(2).mean()
-                # print("critic loss", critic_loss)
                 entropy = dist.entropy()
 
                 loss = 0.5 * critic_loss + actor_loss  - 0.01 * entropy
 
                 optimizer.zero_grad()
                 
-                loss.sum().backward()
+                loss.mean().backward()
                 
                 optimizer.step()
-        print(loss.sum())
+                loss_sum += loss.mean().item()
+        mean_loss+=loss_sum
+
+    print(mean_loss / ppo_epochs)
+    return mean_loss / ppo_epochs
 
 num_inputs  = envs.observation_space.shape
 num_outputs = envs.action_space.n
@@ -191,13 +194,16 @@ optimizer = optim.Adam(model.parameters(), lr=lr)
 max_frames = 150000
 frame_idx  = 0
 test_rewards = []
+losses = []
 early_stop = False
 
 f1 = envs.reset()
 f2 = envs.step([0]*num_envs)
 
 from pong_utils import collect_trajectories
-while not early_stop:
+while not early_stop and frame_idx < max_frames:
+    frame_idx +=1
+    print(frame_idx)
     log_probs , states, actions, rewards, next_state, masks, values = collect_trajectories(envs,model,num_steps)
 
         # stop if any of the trajectories is done
@@ -210,7 +216,7 @@ while not early_stop:
     _, next_value = model(next_state)
 #     print("next_vlaue shape: " , next_value.shape)
     returns = compute_gae(next_value, rewards, masks, values)
-    logging.debug(f"returns {returns} and shape is {len(returns)}, {len(returns[0])}" )
+#     logging.debug(f"returns {returns} and shape is {len(returns)}, {len(returns[0])}" )
     returns = torch.cat(returns).detach()
 #     logging.debug("after")
 #     logging.debug(f"{returns} and shape is {returns.shape}" )
@@ -219,11 +225,13 @@ while not early_stop:
     values    = torch.cat(values).detach()
     states    = torch.cat(states)
     actions   = torch.cat(actions)
-    logging.debug(f"log_probs {log_probs}")#" and shape is {len(log_probs)}, {len(log_probs[0])}" )
-    logging.debug(f"values= {values}")#" and shape is {len(values)}, {len(values[0])}" )
-    logging.debug(f"states= {states}")#" and shape is {len(states)}, {len(states[0])}" )
-    logging.debug(f"actions= {actions}")#" and shape is {len(actions)}, {len(actions[0])}" )
-
     advantage = returns - values
     
-    ppo_update(ppo_epochs, mini_batch_size, states, actions, log_probs, returns, advantage)
+
+    loss_ = ppo_update(ppo_epochs, mini_batch_size, states, actions, log_probs, returns, advantage)
+    losses.append(loss_)
+    if frame_idx % 100 == 0:
+            torch.save(model.state_dict(), f'PongDeterministic-v4_{frame_idx}.pth')
+            plt.plot(losses)
+            plt.title(f'{frame_idx}th loss')
+            plt.savefig(f'plot/{frame_idx}th_loss.png')

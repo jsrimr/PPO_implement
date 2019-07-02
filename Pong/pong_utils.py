@@ -47,7 +47,7 @@ def collect_trajectories(envs, model, num_steps):
         
         pi, value = model(state)
         # print(value, value.shape , "value")
-        dist = Categorical(logits= pi)
+        dist = Categorical(pi)
         action = dist.sample()
         
         f1, r1, done, _ = envs.step(action.cpu().numpy()) 
