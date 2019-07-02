@@ -95,7 +95,7 @@ class ActorCritic(nn.Module):
         h = h.reshape((-1, 5 * 5 * 32))
 
         h = F.relu(self.lin(h))
-        pi = F.relu(self.pi(h))
+        pi = self.pi(h)
         value = F.relu(self.value(h))
 
         return pi, value
@@ -118,7 +118,7 @@ def test_env(vis=False):
     while not done:
         state = preprocess_batch([f1,f2])
         prob, _ = model(state)
-        dist = Categorical(prob)
+        dist = Categorical(logits = prob)
         next_state, reward, done, _ = env.step(dist.sample().cpu().numpy()[0])
         state = next_state
         if vis: env.render()
@@ -148,21 +148,21 @@ def ppo_iter(mini_batch_size, states, actions, log_probs, returns, advantage): #
 def ppo_update(ppo_epochs, mini_batch_size, states, actions, log_probs, returns, advantages, clip_param=0.2): # training
     for _ in range(ppo_epochs):
         for state, action, old_log_probs, return_, advantage in ppo_iter(mini_batch_size, states, actions, log_probs, returns, advantages):
-            pi, value = model(state)
-            dist = Categorical(pi)
-        #     new_log_probs a= dist.log_prob(action)
-            
-            pi_a = pi.gather(1,action.unsqueeze(-1))
-            # logging.warning(f'{pi_a} : pi_a')
-            new_log_probs = torch.log(pi_a)
-
-            ratio = (new_log_probs - old_log_probs).exp()
-            # print("ratio :",  ratio)
-            surr1 = ratio * advantage
-            surr2 = torch.clamp(ratio, 1.0 - clip_param, 1.0 + clip_param) * advantage
-
-
             with torch.autograd.detect_anomaly():
+                pi, value = model(state)
+                dist = Categorical(logits = pi)
+                #     new_log_probs a= dist.log_prob(action)
+                
+                pi_a = pi.gather(1,action.unsqueeze(-1))
+                # logging.warning(f'{pi_a} : pi_a')
+                new_log_probs = torch.log(pi_a)
+
+                ratio = (new_log_probs - old_log_probs).exp()
+                # print("ratio :",  ratio)
+                surr1 = ratio * advantage
+                surr2 = torch.clamp(ratio, 1.0 - clip_param, 1.0 + clip_param) * advantage
+
+
                 actor_loss  = - torch.min(surr1, surr2).mean()
                 # print("actor loss", actor_loss)
                 critic_loss = (return_.detach() - value).pow(2).mean()
