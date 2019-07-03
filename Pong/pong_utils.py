@@ -1,8 +1,8 @@
 import numpy as np
 import torch
 from torch.distributions import Categorical
-device   = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
-
+# device   = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 # preprocess a single frame
 # crop image and downsample to 80x80
 # stack two frames together as input
@@ -53,12 +53,14 @@ def collect_trajectories(envs, model, num_steps):
         f1, r1, done, _ = envs.step(action.cpu().numpy()) 
         f2, r2, done, _ = envs.step(action.cpu().numpy()) 
         reward = r1 + r2
+        # print(torch.tensor(reward).sum(dim=0).mean())
         # logging.warning(f'dist[action] : {dist[action]}')
         # print(action)
         log_prob = dist.log_prob(action) #torch.log(dist[action])
         log_probs.append(log_prob) #num_envs*1
         values.append(value) # num_envs * 1
-        rewards.append(torch.FloatTensor(reward).unsqueeze(1).to(device))
+        # rewards.append(torch.FloatTensor(reward).unsqueeze(1).to(device))
+        rewards.append(reward)
         masks.append(torch.FloatTensor(1 - done).unsqueeze(1).to(device))
         
         states.append(state) #num_envs* 2 * 80 * 80
