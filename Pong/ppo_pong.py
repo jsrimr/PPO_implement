@@ -29,9 +29,10 @@ from pong_utils import collect_trajectories
 from arguments import argparser
 
 args = argparser()
+load_weight_n = args.n
 
 num_envs = 16
-env_name = "Pong-v0"
+env_name = "PongDeterministic-v4"
 #Hyper params:
 hidden_size      = 32
 lr               = 1e-4
@@ -39,7 +40,16 @@ num_steps        = 128
 mini_batch_size  = 256
 ppo_epochs       = 3
 threshold_reward = 16
-load_weight_n = 305000
+
+max_frames = 150000
+discount = 0.99
+epsilon = 0.1
+beta = 0.4
+early_stop = False
+n_updates = 4
+
+frame_idx  = 0
+scores_list = []
 
 def make_env():
     def _thunk():
@@ -116,8 +126,10 @@ def test_env(vis=False):
         state = preprocess_batch([f1,f2])
         pi, _ = model(state)
         dist = Categorical(pi)
-        next_state, reward, done, _ = env.step(dist.sample().cpu().numpy()[0])
-        state = next_state
+        f1, r1, done, _ = env.step(dist.sample().cpu().numpy()[0])
+        f2, r2, done, _ = env.step(dist.sample().cpu().numpy()[0])
+        reward = r1 + r2
+
         if vis: env.render()
         total_reward += reward
         # print(total_reward)
@@ -186,7 +198,7 @@ def states_to_prob(model, states):
     return pi
 
 def clipped_surrogate(policy, log_old_probs, states, actions, rewards,
-                      discount=0.995, epsilon=0.1, beta=0.01):
+                      discount=0.995, epsilon=0.1, beta=0.2):
     
     rewards_future = signal.lfilter([1], [1, -discount], np.asarray(rewards)[::-1], axis=0)[::-1]
     
@@ -217,18 +229,8 @@ def clipped_surrogate(policy, log_old_probs, states, actions, rewards,
 
 model = ActorCritic().to(device) #return dist, v
 if args.load_weight:
-        model.load_state_dict(torch.load(f'weight/PongDeterministic-v4_{load_weight_n}.pth'))
+        model.load_state_dict(torch.load(f'PongDeterministic-v4_{load_weight_n}.pth'))
 optimizer = optim.Adam(model.parameters(), lr=lr)
-
-max_frames = 150000
-frame_idx  = 0
-discount = 0.99
-epsilon = 0.1
-beta = 0.01
-# test_rewards = []
-losses = []
-early_stop = False
-n_updates = 4
 
 f1 = envs.reset()
 f2 = envs.step([0]*num_envs)
@@ -237,8 +239,11 @@ if __name__ =="__main__":
     while not early_stop and frame_idx < max_frames:
         frame_idx +=1
         print(frame_idx)
+        if frame_idx % 100 == 0 :
+            num_steps += args.additional_num_step
         log_probs, states, actions, rewards, next_state, masks, values = collect_trajectories(envs,model,num_steps)
         scores = np.asarray(rewards).sum(axis=0)
+        scores_list.append(scores.mean())
         print("Mean:", scores.mean(), "\nRaw:", scores)
 
             # stop if any of the trajectories is done
@@ -248,6 +253,8 @@ if __name__ =="__main__":
 
             # uncomment to utilize your own clipped function!
             # raise Exception(type(states), states[0].size())
+            if args.beta_decay and beta > 0.01:
+                beta *= discount
             L = -clipped_surrogate(model, log_probs, states, actions, rewards, discount, epsilon, beta)
 
             optimizer.zero_grad()
@@ -285,11 +292,11 @@ if __name__ =="__main__":
 
     #     loss_ = ppo_update(ppo_epochs, mini_batch_size, states, actions, log_probs, returns.view(-1, 1), advantage.view(-1, 1))
     #     losses.append(loss_)
-        print(loss)
+        # print(loss)
         if frame_idx % 100 == 0:
-                torch.save(model.state_dict(), f'PongDeterministic-v4_{frame_idx}.pth')
-                plt.plot(losses)
-                plt.title(f'{frame_idx}th loss')
-                plt.savefig(f'plot/{frame_idx}th_loss.png')
+                torch.save(model.state_dict(), f'PongDeterministic-v4_{frame_idx+load_weight_n}.pth')
+                plt.plot(scores_list)
+                plt.title(f'{frame_idx}th score')
+                plt.savefig(f'plot/{frame_idx}th_score.png')
                 test_rewards = np.mean([test_env() for _ in range(10)])
                 print(f"test rewards = {test_rewards}")
